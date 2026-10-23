@@ -6,7 +6,7 @@
  *
  * The attribute is a dictionary of unique_id -> reminder text. Acknowledging
  * fires the `acknowledge_reminder` event (with `unique_id`) or the
- * `acknowledge_all` event; the sensor is expected to drop the reminder(s),
+ * `acknowledge_all_reminders` event; the sensor is expected to drop the reminder(s),
  * after which the card re-renders from the new state.
  */
 
@@ -133,7 +133,7 @@ class RemindersCard extends HTMLElement {
     ids.forEach((id) => this._markPending(id));
     this._render();
     try {
-      await this._fireEvent("acknowledge_all");
+      await this._fireEvent("acknowledge_all_reminders");
     } catch (err) {
       this._failed(err, ids);
     }
