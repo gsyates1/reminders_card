@@ -4,13 +4,18 @@
  * A Home Assistant Lovelace card that lists the reminders held in the
  * `reminders` attribute of a sensor and lets the user acknowledge them.
  *
- * The attribute is a dictionary of unique_id -> reminder text. Acknowledging
- * fires the `acknowledge_reminder` event (with `unique_id`) or the
- * `acknowledge_all_reminders` event; the sensor is expected to drop the reminder(s),
+ * The attribute is a dictionary of reminder id -> reminder text, as kept by
+ * the Reminders integration's sensor (sensor.reminders). Acknowledging calls
+ * the integration's reminders.acknowledge action (with `id`) or its
+ * reminders.acknowledge_all action; the sensor then drops the reminder(s),
  * after which the card re-renders from the new state.
  */
 
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "2.0.0";
+const DOMAIN = "reminders";
+const ACTION_ACKNOWLEDGE = "acknowledge";
+const ACTION_ACKNOWLEDGE_ALL = "acknowledge_all";
+const DEFAULT_ENTITY = "sensor.reminders";
 const ACK_ICON = "mdi:check-circle-outline";
 const DEFAULT_LIST_HEIGHT = "250px";
 // Reminders acknowledged from the card are hidden straight away. If the
@@ -29,7 +34,7 @@ class RemindersCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._pending = new Map(); // unique_id -> timeout handle
+    this._pending = new Map(); // reminder id -> timeout handle
     this._lastReminders = undefined;
   }
 
@@ -38,10 +43,21 @@ class RemindersCard extends HTMLElement {
   }
 
   static getStubConfig(hass) {
-    const entity = Object.keys(hass.states).find(
-      (id) => hass.states[id].attributes && "reminders" in hass.states[id].attributes
-    );
-    return { entity: entity || "" };
+    if (hass.states[DEFAULT_ENTITY]) {
+      return { entity: DEFAULT_ENTITY };
+    }
+    // Fall back to another sensor with plain {id: "text"} reminders (not the
+    // dynamic reminders sensor, whose values are objects).
+    const entity = Object.keys(hass.states).find((id) => {
+      const reminders = hass.states[id].attributes && hass.states[id].attributes.reminders;
+      return (
+        reminders &&
+        typeof reminders === "object" &&
+        !Array.isArray(reminders) &&
+        Object.values(reminders).every((value) => typeof value === "string")
+      );
+    });
+    return { entity: entity || DEFAULT_ENTITY };
   }
 
   setConfig(config) {
@@ -109,20 +125,19 @@ class RemindersCard extends HTMLElement {
     );
   }
 
-  async _fireEvent(eventType, eventData) {
-    // The websocket fire_event command needs an admin user.
-    await this._hass.callWS({
-      type: "fire_event",
-      event_type: eventType,
-      ...(eventData ? { event_data: eventData } : {}),
-    });
+  async _callAction(action, data) {
+    if (!this._hass) {
+      throw new Error("Home Assistant connection not available");
+    }
+    // notifyOnError = false: the card shows its own error notification.
+    await this._hass.callService(DOMAIN, action, data || {}, undefined, false);
   }
 
   async _acknowledge(id) {
     this._markPending(id);
     this._render();
     try {
-      await this._fireEvent("acknowledge_reminder", { unique_id: id });
+      await this._callAction(ACTION_ACKNOWLEDGE, { id });
     } catch (err) {
       this._failed(err, [id]);
     }
@@ -133,7 +148,7 @@ class RemindersCard extends HTMLElement {
     ids.forEach((id) => this._markPending(id));
     this._render();
     try {
-      await this._fireEvent("acknowledge_all_reminders");
+      await this._callAction(ACTION_ACKNOWLEDGE_ALL);
     } catch (err) {
       this._failed(err, ids);
     }
@@ -283,9 +298,17 @@ class RemindersCard extends HTMLElement {
         background: var(--ha-card-background, var(--card-background-color, transparent));
         color: var(--secondary-text-color);
         --mdc-icon-button-size: 40px;
+        /* The card draws its own hover highlight. */
+        --mdc-ripple-hover-opacity: 0;
       }
-      .ack:hover {
-        color: var(--primary-color);
+      .ack:hover,
+      .ack:focus-visible {
+        /* Grey highlight, matching the Dynamic Reminders card's buttons. */
+        color: var(--primary-text-color);
+        background-image: linear-gradient(
+          color-mix(in srgb, currentColor 12%, transparent),
+          color-mix(in srgb, currentColor 12%, transparent)
+        );
       }
       .message {
         padding: 16px;
